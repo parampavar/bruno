@@ -276,6 +276,8 @@ export const collectionsSlice = createSlice({
         if (item) {
           item.response = null;
           item.cancelTokenUid = null;
+          item.requestUid = null;
+          item.requestStartTime = null;
         }
       }
     },
@@ -288,6 +290,7 @@ export const collectionsSlice = createSlice({
           item.requestState = 'received';
           item.response = action.payload.response;
           item.cancelTokenUid = null;
+          item.requestStartTime = null;
 
           if (!collection.timeline) {
             collection.timeline = [];
@@ -1593,6 +1596,27 @@ export const collectionsSlice = createSlice({
           case 'oauth2':
             set(folder, 'root.request.auth.oauth2', action.payload.content);
             break;
+          case 'basic':
+            set(folder, 'root.request.auth.basic', action.payload.content);
+            break;
+          case 'bearer':
+            set(folder, 'root.request.auth.bearer', action.payload.content);
+            break;
+          case 'digest':
+            set(folder, 'root.request.auth.digest', action.payload.content);
+            break;
+          case 'ntlm':
+            set(folder, 'root.request.auth.ntlm', action.payload.content);
+            break;
+          case 'apikey':
+            set(folder, 'root.request.auth.apikey', action.payload.content);
+            break;
+          case 'awsv4':
+            set(folder, 'root.request.auth.awsv4', action.payload.content);
+            break;
+          case 'wsse':
+            set(folder, 'root.request.auth.wsse', action.payload.content);
+            break;
         }
       }
     },
@@ -1933,26 +1957,44 @@ export const collectionsSlice = createSlice({
         collection.runnerResult = null;
       }
     },
+    initRunRequestEvent: (state, action) => {
+      const { requestUid, itemUid, collectionUid } = action.payload;
+      const collection = findCollectionByUid(state.collections, collectionUid);
+      if (!collection) return;
+      
+      const item = findItemInCollection(collection, itemUid);
+      if (!item) return;
+
+      item.requestState = null;
+      item.requestUid = requestUid;
+      item.requestStartTime = Date.now();
+    },
     runRequestEvent: (state, action) => {
-      const { itemUid, collectionUid, type, requestUid, hasError } = action.payload;
+      const { itemUid, collectionUid, type, requestUid } = action.payload;
       const collection = findCollectionByUid(state.collections, collectionUid);
 
       if (collection) {
         const item = findItemInCollection(collection, itemUid);
         if (item) {
+          // ignore outdated updates in case multiple requests are fired rapidly to avoid state inconsistency
+          if (item.requestUid !== requestUid) return;
+
           if (type === 'pre-request-script-execution') {
-            item.requestUid = requestUid;
             item.preRequestScriptErrorMessage = action.payload.errorMessage;
           }
 
           if(type === 'post-response-script-execution') {
-            item.requestUid = requestUid;
             item.postResponseScriptErrorMessage = action.payload.errorMessage;
+          }
+
+          if(type === 'test-script-execution') {
+            item.testScriptErrorMessage = action.payload.errorMessage;
           }
 
           if (type === 'request-queued') {
             const { cancelTokenUid } = action.payload;
-            item.requestUid = requestUid;
+            // ignore if request is already in progress or completed
+            if (['sending', 'received'].includes(item.requestState)) return;
             item.requestState = 'queued';
             item.cancelTokenUid = cancelTokenUid;
           }
@@ -1960,10 +2002,9 @@ export const collectionsSlice = createSlice({
           if (type === 'request-sent') {
             const { cancelTokenUid, requestSent } = action.payload;
             item.requestSent = requestSent;
-
+            
             // sometimes the response is received before the request-sent event arrives
-            if (item.requestUid === requestUid && item.requestState === 'queued') {
-              item.requestUid = requestUid;
+            if (item.requestState === 'queued') {
               item.requestState = 'sending';
               item.cancelTokenUid = cancelTokenUid;
             }
@@ -1977,6 +2018,16 @@ export const collectionsSlice = createSlice({
           if (type === 'test-results') {
             const { results } = action.payload;
             item.testResults = results;
+          }
+          
+          if (type === 'test-results-pre-request') {
+            const { results } = action.payload;
+            item.preRequestTestResults = results;
+          }
+          
+          if (type === 'test-results-post-response') {
+            const { results } = action.payload;
+            item.postResponseTestResults = results;
           }
         }
       }
@@ -2032,6 +2083,16 @@ export const collectionsSlice = createSlice({
         if (type === 'test-results') {
           const item = collection.runnerResult.items.findLast((i) => i.uid === request.uid);
           item.testResults = action.payload.testResults;
+        }
+
+        if (type === 'test-results-pre-request') {
+          const item = collection.runnerResult.items.findLast((i) => i.uid === request.uid);
+          item.preRequestTestResults = action.payload.preRequestTestResults;
+        }
+
+        if (type === 'test-results-post-response') {
+          const item = collection.runnerResult.items.findLast((i) => i.uid === request.uid);
+          item.postResponseTestResults = action.payload.postResponseTestResults;
         }
 
         if (type === 'assertion-results') {
@@ -2165,6 +2226,7 @@ export const collectionsSlice = createSlice({
       );
       return oauth2Credential;
     },
+
     updateFolderAuthMode: (state, action) => {
       const collection = findCollectionByUid(state.collections, action.payload.collectionUid);
       const folder = collection ? findItemInCollection(collection, action.payload.folderUid) : null;
@@ -2173,8 +2235,9 @@ export const collectionsSlice = createSlice({
         set(folder, 'root.request.auth', {});
         set(folder, 'root.request.auth.mode', action.payload.mode);
       }
-    },
-  }
+    }
+  },
+
 });
 
 export const {
@@ -2275,17 +2338,18 @@ export const {
   collectionAddEnvFileEvent,
   collectionRenamedEvent,
   resetRunResults,
+  initRunRequestEvent,
   runRequestEvent,
   runFolderEvent,
   resetCollectionRunner,
   updateRequestDocs,
   updateFolderDocs,
+  moveCollection,
   collectionAddOauth2CredentialsByUrl,
   collectionClearOauth2CredentialsByUrl,
   collectionGetOauth2CredentialsByUrl,
   updateFolderAuth,
   updateFolderAuthMode,
-  moveCollection
 } = collectionsSlice.actions;
 
 export default collectionsSlice.reducer;

@@ -36,7 +36,8 @@ import {
   updateLastAction,
   setCollectionSecurityConfig,
   collectionAddOauth2CredentialsByUrl,
-  collectionClearOauth2CredentialsByUrl
+  collectionClearOauth2CredentialsByUrl,
+  initRunRequestEvent
 } from './index';
 
 import { each } from 'lodash';
@@ -220,14 +221,25 @@ export const sendRequest = (item, collectionUid) => (dispatch, getState) => {
   const state = getState();
   const { globalEnvironments, activeGlobalEnvironmentUid } = state.globalEnvironments;  
   const collection = findCollectionByUid(state.collections.collections, collectionUid);
+  const itemUid = item?.uid;
 
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     if (!collection) {
       return reject(new Error('Collection not found'));
     }
-
-    const itemCopy = cloneDeep(item || {});
+    
     let collectionCopy = cloneDeep(collection);
+
+    const itemCopy = cloneDeep(item);
+
+    const requestUid = uuid();
+    itemCopy.requestUid = requestUid;
+
+    await dispatch(initRunRequestEvent({
+      requestUid,
+      itemUid,
+      collectionUid
+    }));
 
     // add selected global env variables to the collection object
     const globalEnvironmentVariables = getGlobalEnvironmentVariables({ globalEnvironments, activeGlobalEnvironmentUid });
@@ -247,8 +259,8 @@ export const sendRequest = (item, collectionUid) => (dispatch, getState) => {
 
         return dispatch(
           responseReceived({
-            itemUid: item.uid,
-            collectionUid: collectionUid,
+            itemUid,
+            collectionUid,
             response: serializedResponse
           })
         );
@@ -259,8 +271,8 @@ export const sendRequest = (item, collectionUid) => (dispatch, getState) => {
           console.log('>> request cancelled');
           dispatch(
             responseReceived({
-              itemUid: item.uid,
-              collectionUid: collectionUid,
+              itemUid,
+              collectionUid,
               response: null
             })
           );
@@ -277,8 +289,8 @@ export const sendRequest = (item, collectionUid) => (dispatch, getState) => {
 
         dispatch(
           responseReceived({
-            itemUid: item.uid,
-            collectionUid: collectionUid,
+            itemUid,
+            collectionUid,
             response: errorResponse
           })
         );
@@ -381,7 +393,12 @@ export const newFolder = (folderName, directoryName, collectionUid, itemUid) => 
                 meta: {
                   name: folderName,
                   seq: items?.length + 1 
-                } 
+                },
+                request: {
+                  auth: {
+                    mode: 'inherit'
+                  }
+                }
               }
             };
             ipcRenderer
@@ -417,7 +434,12 @@ export const newFolder = (folderName, directoryName, collectionUid, itemUid) => 
                   meta: {
                     name: folderName,
                     seq: items?.length + 1 
-                  } 
+                  },
+                  request: {
+                    auth: {
+                      mode: 'inherit'
+                    }
+                  }
                 }
               };
               ipcRenderer

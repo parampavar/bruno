@@ -1,3 +1,4 @@
+import sendRequestTransformer from './send-request-transformer';
 const j = require('jscodeshift');
 const cloneDeep = require('lodash/cloneDeep');
 
@@ -52,7 +53,7 @@ const simpleTranslations = {
   'pm.variables.get': 'bru.getVar',
   'pm.variables.set': 'bru.setVar',
   'pm.variables.has': 'bru.hasVar',
-  
+  'pm.variables.replaceIn': 'bru.interpolate',
   // Collection variables
   'pm.collectionVariables.get': 'bru.getVar',
   'pm.collectionVariables.set': 'bru.setVar',
@@ -66,6 +67,9 @@ const simpleTranslations = {
   'pm.test': 'test',
   'pm.expect': 'expect',
   'pm.expect.fail': 'expect.fail',
+
+  // Info
+  'pm.info.requestName': 'req.getName()',
 
   // Request properties
   'pm.request.url': 'req.getUrl()',
@@ -96,7 +100,14 @@ const simpleTranslations = {
 * as a separate statement, which allows a single Postman expression to be
 * transformed into multiple Bruno statements (e.g. for complex assertions).
 */
+
 const complexTransformations = [
+  // pm.sendRequest transformation
+  {
+    pattern: 'pm.sendRequest',
+    transform: sendRequestTransformer
+  },
+  
   // pm.environment.has requires special handling
  {
     pattern: 'pm.environment.has',

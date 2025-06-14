@@ -32,6 +32,7 @@ const prepareRequest = (item = {}, collection = {}) => {
     method: request.method,
     url: request.url,
     headers: headers,
+    name: item.name,
     pathParams: request?.params?.filter((param) => param.type === 'path'),
     responseType: 'arraybuffer'
   };
@@ -46,7 +47,7 @@ const prepareRequest = (item = {}, collection = {}) => {
     }
 
     if (collectionAuth.mode === 'bearer') {
-      axiosRequest.headers['Authorization'] = `Bearer ${get(collectionAuth, 'bearer.token')}`;
+      axiosRequest.headers['Authorization'] = `Bearer ${get(collectionAuth, 'bearer.token', '')}`;
     }
 
     if (collectionAuth.mode === 'apikey') {
@@ -173,7 +174,7 @@ const prepareRequest = (item = {}, collection = {}) => {
     }
 
     if (request.auth.mode === 'bearer') {
-      axiosRequest.headers['Authorization'] = `Bearer ${get(request, 'auth.bearer.token')}`;
+      axiosRequest.headers['Authorization'] = `Bearer ${get(request, 'auth.bearer.token', '')}`;
     }
 
     if (request.auth.mode === 'wsse') {

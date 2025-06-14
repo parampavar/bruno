@@ -45,10 +45,33 @@ const runSingleRequest = async function (
 ) {
   const { pathname: itemPathname } = item;
   const relativeItemPathname = path.relative(collectionPath, itemPathname);
+
+  const logResults = (results, title) => {
+    if (results?.length) {
+      if (title) {
+        console.log(chalk.dim(title));
+      }
+      each(results, (r) => {
+        const message = r.description || `${r.lhsExpr}: ${r.rhsExpr}`;
+        if (r.status === 'pass') {
+          console.log(chalk.green(`   ✓ `) + chalk.dim(message));
+        } else {
+          console.log(chalk.red(`   ✕ `) + chalk.red(message));
+          if (r.error) {
+            console.log(chalk.red(`      ${r.error}`));
+          }
+        }
+      });
+    }
+  };
+
   try {
     let request;
     let nextRequestName;
     let shouldStopRunnerExecution = false;
+    let preRequestTestResults = [];
+    let postResponseTestResults = [];
+
     request = prepareRequest(item, collection);
 
     request.__bruno__executionMode = 'cli';
@@ -58,6 +81,7 @@ const runSingleRequest = async function (
 
     // run pre request script
     const requestScriptFile = get(request, 'script.req');
+    const collectionName = collection?.brunoConfig?.name
     if (requestScriptFile?.length) {
       const scriptRuntime = new ScriptRuntime({ runtime: scriptingConfig?.runtime });
       const result = await scriptRuntime.runRequestScript(
@@ -69,7 +93,8 @@ const runSingleRequest = async function (
         onConsoleLog,
         processEnvVars,
         scriptingConfig,
-        runSingleRequestByPathname
+        runSingleRequestByPathname,
+        collectionName
       );
       if (result?.nextRequestName !== undefined) {
         nextRequestName = result.nextRequestName;
@@ -101,9 +126,13 @@ const runSingleRequest = async function (
           skipped: true,
           assertionResults: [],
           testResults: [],
+          preRequestTestResults: result?.results || [],
+          postResponseTestResults: [],
           shouldStopRunnerExecution
         };
       }
+
+      preRequestTestResults = result?.results || [];
     }
 
     // interpolate variables inside request
@@ -115,6 +144,7 @@ const runSingleRequest = async function (
 
     const options = getOptions();
     const insecure = get(options, 'insecure', false);
+    const noproxy = get(options, 'noproxy', false);
     const httpsAgentRequestFields = {};
     if (insecure) {
       httpsAgentRequestFields['rejectUnauthorized'] = false;
@@ -179,15 +209,22 @@ const runSingleRequest = async function (
 
     const collectionProxyConfig = get(brunoConfig, 'proxy', {});
     const collectionProxyEnabled = get(collectionProxyConfig, 'enabled', false);
-    if (collectionProxyEnabled === true) {
+    
+    if (noproxy) {
+      // If noproxy flag is set, don't use any proxy
+      proxyMode = 'off';
+    } else if (collectionProxyEnabled === true) {
+      // If collection proxy is enabled, use it
       proxyConfig = collectionProxyConfig;
       proxyMode = 'on';
-    } else {
-      // if the collection level proxy is not set, pick the system level proxy by default, to maintain backward compatibility
+    } else if (collectionProxyEnabled === 'global') {
+      // If collection proxy is set to 'global', use system proxy
       const { http_proxy, https_proxy } = getSystemProxyEnvVariables();
       if (http_proxy?.length || https_proxy?.length) {
         proxyMode = 'system';
       }
+    } else {
+      proxyMode = 'off';
     }
 
     if (proxyMode === 'on') {
@@ -201,8 +238,8 @@ const runSingleRequest = async function (
         let uriPort = isUndefined(proxyPort) || isNull(proxyPort) ? '' : `:${proxyPort}`;
         let proxyUri;
         if (proxyAuthEnabled) {
-          const proxyAuthUsername = interpolateString(get(proxyConfig, 'auth.username'), interpolationOptions);
-          const proxyAuthPassword = interpolateString(get(proxyConfig, 'auth.password'), interpolationOptions);
+          const proxyAuthUsername = encodeURIComponent(interpolateString(get(proxyConfig, 'auth.username'), interpolationOptions));
+          const proxyAuthPassword = encodeURIComponent(interpolateString(get(proxyConfig, 'auth.password'), interpolationOptions));
 
           proxyUri = `${proxyProtocol}://${proxyAuthUsername}:${proxyAuthPassword}@${proxyHostname}${uriPort}`;
         } else {
@@ -304,6 +341,14 @@ const runSingleRequest = async function (
       }
     }
 
+    let requestMaxRedirects = request.maxRedirects
+    request.maxRedirects = 0
+    
+    // Set default value for requestMaxRedirects if not explicitly set
+    if (requestMaxRedirects === undefined) {
+      requestMaxRedirects = 5; // Default to 5 redirects
+    }
+
     // Handle OAuth2 authentication
     if (request.oauth2) {
       try {
@@ -334,7 +379,7 @@ const runSingleRequest = async function (
     let response, responseTime;
     try {
       
-      let axiosInstance = makeAxiosInstance();
+      let axiosInstance = makeAxiosInstance({ requestMaxRedirects: requestMaxRedirects, disableCookies: options.disableCookies });
       if (request.ntlmConfig) {
         axiosInstance=NtlmClient(request.ntlmConfig,axiosInstance.defaults)
         delete request.ntlmConfig;
@@ -410,6 +455,8 @@ const runSingleRequest = async function (
           status: 'error',
           assertionResults: [],
           testResults: [],
+          preRequestTestResults,
+          postResponseTestResults,
           nextRequestName: nextRequestName,
           shouldStopRunnerExecution
         };
@@ -422,6 +469,9 @@ const runSingleRequest = async function (
       chalk.green(stripExtension(relativeItemPathname)) +
       chalk.dim(` (${response.status} ${response.statusText}) - ${responseTime} ms`)
     );
+
+    // Log pre-request test results
+    logResults(preRequestTestResults, 'Pre-Request Tests');
 
     // run post-response vars
     const postResponseVars = get(item, 'request.vars.res');
@@ -452,7 +502,8 @@ const runSingleRequest = async function (
         null,
         processEnvVars,
         scriptingConfig,
-        runSingleRequestByPathname
+        runSingleRequestByPathname,
+        collectionName
       );
       if (result?.nextRequestName !== undefined) {
         nextRequestName = result.nextRequestName;
@@ -461,9 +512,11 @@ const runSingleRequest = async function (
       if (result?.stopExecution) {
         shouldStopRunnerExecution = true;
       }
+
+      postResponseTestResults = result?.results || [];
+      logResults(postResponseTestResults, 'Post-Response Tests');
     }
 
-    // run assertions
     let assertionResults = [];
     const assertions = get(item, 'request.assertions');
     if (assertions) {
@@ -476,15 +529,6 @@ const runSingleRequest = async function (
         runtimeVariables,
         processEnvVars
       );
-
-      each(assertionResults, (r) => {
-        if (r.status === 'pass') {
-          console.log(chalk.green(`   ✓ `) + chalk.dim(`assert: ${r.lhsExpr}: ${r.rhsExpr}`));
-        } else {
-          console.log(chalk.red(`   ✕ `) + chalk.red(`assert: ${r.lhsExpr}: ${r.rhsExpr}`));
-          console.log(chalk.red(`      ${r.error}`));
-        }
-      });
     }
 
     // run tests
@@ -502,7 +546,8 @@ const runSingleRequest = async function (
         null,
         processEnvVars,
         scriptingConfig,
-        runSingleRequestByPathname
+        runSingleRequestByPathname,
+        collectionName
       );
       testResults = get(result, 'results', []);
 
@@ -513,17 +558,12 @@ const runSingleRequest = async function (
       if (result?.stopExecution) {
         shouldStopRunnerExecution = true;
       }
+
+      logResults(testResults, 'Tests');
     }
 
-    if (testResults?.length) {
-      each(testResults, (testResult) => {
-        if (testResult.status === 'pass') {
-          console.log(chalk.green(`   ✓ `) + chalk.dim(testResult.description));
-        } else {
-          console.log(chalk.red(`   ✕ `) + chalk.red(testResult.description));
-        }
-      });
-    }
+
+    logResults(assertionResults, 'Assertions');
 
     return {
       test: {
@@ -546,6 +586,8 @@ const runSingleRequest = async function (
       status: 'pass',
       assertionResults,
       testResults,
+      preRequestTestResults,
+      postResponseTestResults,
       nextRequestName: nextRequestName,
       shouldStopRunnerExecution
     };
@@ -571,7 +613,9 @@ const runSingleRequest = async function (
       status: 'error',
       error: err.message,
       assertionResults: [],
-      testResults: []
+      testResults: [],
+      preRequestTestResults: [],
+      postResponseTestResults: []
     };
   }
 };

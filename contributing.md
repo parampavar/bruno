@@ -98,6 +98,15 @@ npm run dev:electron
 npm run dev
 ```
 
+#### Customize Electron `userData` path
+If `ELECTRON_USER_DATA_PATH` env-variable is present and its development mode, then `userData` path is modified accordingly.
+
+e.g.
+```sh
+ELECTRON_USER_DATA_PATH=$(realpath ~/Desktop/bruno-test) npm run dev:electron
+```
+This will create a `bruno-test` folder on your Desktop and use it as the `userData` path.
+
 ### Troubleshooting
 
 You might encounter a `Unsupported platform` error when you run `npm install`. To fix this, you will need to delete `node_modules` and `package-lock.json` and run `npm install`. This should install all the necessary packages needed to run the app.
